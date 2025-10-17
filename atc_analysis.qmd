@@ -1,0 +1,437 @@
+---
+title: "Mapping the Latin American Pharmaceutical Landscape"
+subtitle: "An Analysis of Drug Preparations by ATC Classification"
+author: "Lukman Aliyu"
+date: today
+format:
+  html:
+    theme: cosmo
+    toc: true
+    toc-depth: 3
+    code-fold: true
+    code-summary: "Show code"
+    embed-resources: true
+    fig-width: 10
+    fig-height: 6
+execute:
+  warning: false
+  message: false
+---
+
+## Introduction
+
+The Anatomical Therapeutic Chemical (ATC) classification system, established by the World Health Organization, provides a standardized framework for categorizing pharmaceutical substances. This analysis explores the diversity of drug preparations available across Latin America, revealing patterns in therapeutic focus and pharmaceutical availability.
+
+Using open-source data from the [`drugs-datasets`](https://github.com/sydmizar/drugs-datasets) repository, I examine drug-to-ATC mappings spanning **14 major therapeutic categories**. This work demonstrates advanced table design techniques using the `gt` package while providing meaningful insights into regional pharmaceutical distribution.
+
+## Data Acquisition & Preparation
+
+```{r setup}
+#| code-summary: "Load required packages"
+
+# Core data manipulation and table creation
+library(dplyr)
+library(tidyr)
+library(gt)
+
+# Additional packages for enhanced visualizations
+library(scales)
+library(glue)
+library(stringr)
+```
+
+```{r download-data}
+#| code-summary: "Download data from drugs-datasets repository"
+
+# Define data sources from sydmizar/drugs-datasets GitHub repository
+url_cng_atc <- "https://raw.githubusercontent.com/sydmizar/drugs-datasets/master/latam_csv/commonnamegroup_atc.csv"
+url_atc <- "https://raw.githubusercontent.com/sydmizar/drugs-datasets/master/latam_csv/atcclass.csv"
+
+# Local file paths for caching
+local_cng_atc <- "commonnamegroup_atc.csv"
+local_atc <- "atcclass.csv"
+
+# Download files if not already present (enables offline work)
+if (!file.exists(local_cng_atc)) {
+  download.file(url_cng_atc, destfile = local_cng_atc, quiet = TRUE)
+  cat("✓ Downloaded commonnamegroup_atc.csv\n")
+}
+
+if (!file.exists(local_atc)) {
+  download.file(url_atc, destfile = local_atc, quiet = TRUE)
+  cat("✓ Downloaded atcclass.csv\n")
+}
+```
+
+```{r load-and-process}
+#| code-summary: "Load and merge datasets"
+
+# Load CSV files
+# commonnamegroup_atc: maps drug preparations to ATC classes
+# atcclass: provides ATC classification hierarchy and codes
+cng_atc <- read.csv(local_cng_atc, stringsAsFactors = FALSE)
+atc <- read.csv(local_atc, stringsAsFactors = FALSE)
+
+# Join datasets and extract first-level ATC category
+# The first character of the ATC code indicates the main anatomical/therapeutic group
+merged <- cng_atc |>
+  left_join(atc |> select(atcclassid, code, name), by = "atcclassid") |>
+  filter(!is.na(code)) |>
+  mutate(first_level = substr(code, 1, 1))
+
+# Calculate summary statistics
+total_preparations <- n_distinct(merged$commonnamegroupid)
+total_atc_classes <- n_distinct(merged$atcclassid)
+```
+
+::: callout-note
+## Data Overview
+
+-   **Total unique preparations:** `r comma(total_preparations)`
+-   **Total ATC classes represented:** `r comma(total_atc_classes)`
+-   **Data source:** [sydmizar/drugs-datasets](https://github.com/sydmizar/drugs-datasets)
+:::
+
+## ATC Classification System
+
+The WHO ATC system organizes drugs hierarchically:
+
+1.  **First level (1 letter)**: Anatomical/therapeutic main group
+2.  **Second level (2 digits)**: Therapeutic subgroup
+3.  **Third level (1 letter)**: Pharmacological subgroup
+4.  **Fourth level (1 letter)**: Chemical subgroup
+5.  **Fifth level (2 digits)**: Chemical substance
+
+This analysis focuses on the **first level** to understand broad therapeutic patterns.
+
+```{r define-categories}
+#| code-summary: "Define ATC first-level category names"
+
+# WHO ATC first-level anatomical/therapeutic categories
+atc_first_level_names <- c(
+  A = "Alimentary tract and metabolism",
+  B = "Blood and blood forming organs",
+  C = "Cardiovascular system",
+  D = "Dermatologicals",
+  G = "Genito-urinary system and sex hormones",
+  H = "Systemic hormonal preparations (excluding sex hormones and insulins)",
+  J = "Antiinfectives for systemic use",
+  L = "Antineoplastic and immunomodulating agents",
+  M = "Musculo-skeletal system",
+  N = "Nervous system",
+  P = "Antiparasitic products, insecticides and repellents",
+  R = "Respiratory system",
+  S = "Sensory organs",
+  V = "Various"
+)
+```
+
+```{r calculate-summary}
+#| code-summary: "Calculate category-level statistics"
+
+# Aggregate data by first-level ATC category
+category_summary <- merged |>
+  group_by(first_level) |>
+  summarise(
+    n_drugs = n_distinct(commonnamegroupid),
+    n_atc_classes = n_distinct(atcclassid),
+    .groups = "drop"
+  ) |>
+  mutate(
+    category_name = atc_first_level_names[first_level],
+    percentage = n_drugs / total_preparations * 100,
+    # Calculate average preparations per ATC class as a complexity metric
+    avg_preps_per_class = n_drugs / n_atc_classes
+  ) |>
+  arrange(desc(n_drugs))
+```
+
+## Main Results Table
+
+```{r main-table}
+#| code-summary: "Create enhanced summary table with gt"
+
+# Create the main comparison table
+main_table <- category_summary |>
+  select(
+    `ATC Code` = first_level,
+    Category = category_name,
+    `Unique Preparations` = n_drugs,
+    `ATC Classes` = n_atc_classes,
+    `Share (%)` = percentage,
+    `Avg Preps/Class` = avg_preps_per_class
+  ) |>
+  gt() |>
+  # Header and subtitle
+  tab_header(
+    title = md("**Latin American Drug Preparations by ATC Category**"),
+    subtitle = glue("Analysis of {comma(total_preparations)} unique preparations across 14 therapeutic areas")
+  ) |>
+  # Column alignment
+  cols_align(align = "center", columns = `ATC Code`) |>
+  cols_align(align = "left", columns = Category) |>
+  cols_align(align = "right", columns = c(`Unique Preparations`, `ATC Classes`, `Share (%)`, `Avg Preps/Class`)) |>
+  # Format numbers
+  fmt_number(
+    columns = `Unique Preparations`,
+    decimals = 0,
+    sep_mark = ","
+  ) |>
+  fmt_number(
+    columns = `ATC Classes`,
+    decimals = 0,
+    sep_mark = ","
+  ) |>
+  fmt_number(
+    columns = `Share (%)`,
+    decimals = 1
+  ) |>
+  fmt_number(
+    columns = `Avg Preps/Class`,
+    decimals = 1
+  ) |>
+  # Add sparkline-style bar chart in the percentage column
+  data_color(
+    columns = `Share (%)`,
+    method = "numeric",
+    palette = c("black", "#2d7bb6"),
+    domain = c(0, max(category_summary$percentage))
+  ) |>
+  # Highlight top categories
+  tab_style(
+    style = cell_fill(color = "#bbafda", alpha = 0.1),
+    locations = cells_body(rows = 1:3)
+  ) |>
+  # Add column spanners for logical grouping
+  tab_spanner(
+    label = "Volume Metrics",
+    columns = c(`Unique Preparations`, `ATC Classes`)
+  ) |>
+  tab_spanner(
+    label = "Distribution Metrics",
+    columns = c(`Share (%)`, `Avg Preps/Class`)
+  ) |>
+  # Column labels with additional context
+  cols_label(
+    `Avg Preps/Class` = html("Avg Preps<br>per Class")
+  ) |>
+  # Source notes and footnotes
+  tab_source_note(
+    source_note = md("**Data:** sydmizar/drugs-datasets (latam_csv) | **Classification:** WHO ATC System")
+  ) |>
+  tab_footnote(
+    footnote = "Categories ranked by total unique preparations",
+    locations = cells_column_labels(columns = Category)
+  ) |>
+  tab_footnote(
+    footnote = "Average number of unique preparations per ATC class within category",
+    locations = cells_column_labels(columns = `Avg Preps/Class`)
+  ) |>
+  # Table styling options
+  tab_options(
+    table.font.size = px(14),
+    heading.title.font.size = px(20),
+    heading.subtitle.font.size = px(14),
+    heading.align = "left",
+    column_labels.font.weight = "bold",
+    row_group.font.weight = "bold",
+    data_row.padding = px(6),
+    source_notes.font.size = px(11),
+    footnotes.font.size = px(11)
+  )
+
+main_table
+```
+
+## Detailed Category Breakdown
+
+```{r top-categories-detail}
+#| code-summary: "Create detailed table for top 5 categories"
+#| tbl-cap: "Deep dive into the five most represented therapeutic categories"
+
+# Get top 5 categories
+top_5_codes <- category_summary |>
+  slice_head(n = 5) |>
+  pull(first_level)
+
+# Create detailed breakdown for top categories
+top_detail <- merged |>
+  filter(first_level %in% top_5_codes) |>
+  group_by(first_level, atcclassid, name) |>
+  summarise(n_preps = n_distinct(commonnamegroupid), .groups = "drop") |>
+  left_join(
+    category_summary |> select(first_level, category_name, n_drugs),
+    by = "first_level"
+  ) |>
+  mutate(
+    pct_of_category = n_preps / n_drugs * 100,
+    category_label = paste0(first_level, " - ", category_name)
+  ) |>
+  group_by(category_label) |>
+  slice_max(order_by = n_preps, n = 8, with_ties = FALSE) |>
+  ungroup() |>
+  select(
+    Category = category_label,
+    `ATC Class Name` = name,
+    `Preparations` = n_preps,
+    `% of Category` = pct_of_category
+  )
+
+# Create grouped table
+detail_table <- top_detail |>
+  gt(groupname_col = "Category") |>
+  tab_header(
+    title = md("**Most Common ATC Classes Within Top 5 Categories**"),
+    subtitle = "Showing up to 8 most prevalent classes per category"
+  ) |>
+  fmt_number(
+    columns = Preparations,
+    decimals = 0,
+    sep_mark = ","
+  ) |>
+  fmt_number(
+    columns = `% of Category`,
+    decimals = 1
+  ) |>
+  data_color(
+    columns = Preparations,
+    method = "numeric",
+    palette = c("#f7f7f7", "#d73027"),
+    domain = NULL
+  ) |>
+  cols_align(align = "left", columns = `ATC Class Name`) |>
+  cols_align(align = "right", columns = c(Preparations, `% of Category`)) |>
+  tab_options(
+    table.font.size = px(13),
+    row_group.font.weight = "bold",
+    row_group.background.color = "#f0f0f0",
+    data_row.padding = px(5)
+  ) |>
+  tab_source_note(
+    source_note = "Classes ordered by number of unique preparations within each category"
+  )
+
+detail_table
+```
+
+## Key Insights
+
+```{r insights-calculation}
+#| include: false
+
+# Calculate key metrics for narrative
+top_category <- category_summary |> slice(1)
+top_3_share <- sum(category_summary$percentage[1:3])
+most_diverse <- category_summary |> slice_max(avg_preps_per_class, n = 1)
+least_diverse <- category_summary |> slice_min(avg_preps_per_class, n = 1)
+```
+
+::: callout-important
+## Major Findings
+
+1.  **`r top_category$category_name`** (`r top_category$first_level`) dominates with **`r comma(top_category$n_drugs)` preparations** (`r round(top_category$percentage, 1)`% of total)
+
+2.  The **top 3 categories** account for **`r round(top_3_share, 1)`%** of all preparations, indicating concentration in key therapeutic areas
+
+3.  **`r most_diverse$category_name`** shows the highest diversity with **`r round(most_diverse$avg_preps_per_class, 1)` preparations per ATC class** on average
+
+4.  Category **`r least_diverse$first_level`** has the lowest preparation-to-class ratio (**`r round(least_diverse$avg_preps_per_class, 1)`**), suggesting more specialized formulations
+:::
+
+## Visual Summary
+
+```{r comparison-visual}
+#| code-summary: "Create visual comparison table"
+#| fig-height: 8
+
+# Create a visual-focused summary using gt with enhanced styling
+visual_table <- category_summary |>
+  mutate(
+    rank = row_number(),
+    bar_length = n_drugs / max(n_drugs) * 100
+  ) |>
+  select(
+    Rank = rank,
+    Code = first_level,
+    Category = category_name,
+    Count = n_drugs,
+    Percentage = percentage
+  ) |>
+  gt() |>
+  tab_header(
+    title = md("**Therapeutic Category Rankings**"),
+    subtitle = "Visual comparison of preparation volumes"
+  ) |>
+  fmt_number(
+    columns = Count,
+    decimals = 0,
+    sep_mark = ","
+  ) |>
+  fmt_number(
+    columns = Percentage,
+    decimals = 1,
+    pattern = "{x}%"
+  ) |>
+  # Create visual bars for count
+  text_transform(
+    locations = cells_body(columns = Count),
+    fn = function(x) {
+      val <- as.numeric(gsub(",", "", x))
+      max_val <- max(as.numeric(gsub(",", "", category_summary$n_drugs)))
+      bar_pct <- val / max_val * 100
+      
+      glue(
+        "<div style='display: flex; align-items: center; justify-content: space-between;'>
+          <div style='flex-grow: 1; background: linear-gradient(90deg, #3182bd {bar_pct}%, transparent {bar_pct}%); 
+                      padding: 4px 8px; border-radius: 3px; margin-right: 8px;'>
+            <span style='color: white; font-weight: bold; text-shadow: 1px 1px 2px rgba(0,0,0,0.5);'>{scales::comma(val)}</span>
+          </div>
+        </div>"
+      )
+    }
+  ) |>
+  cols_align(align = "center", columns = c(Rank, Code)) |>
+  cols_align(align = "left", columns = Category) |>
+  cols_align(align = "right", columns = Percentage) |>
+  cols_width(
+    Rank ~ px(60),
+    Code ~ px(80),
+    Category ~ px(350),
+    Count ~ px(200),
+    Percentage ~ px(100)
+  ) |>
+  tab_style(
+    style = cell_text(weight = "bold", color = "#d73027"),
+    locations = cells_body(rows = Rank <= 3)
+  ) |>
+  tab_options(
+    table.font.size = px(13),
+    data_row.padding = px(8),
+    heading.align = "left"
+  )
+
+visual_table
+```
+
+## Methodology Notes
+
+This analysis demonstrates several key table design principles:
+
+-   **Data storytelling**: Progressive disclosure from overview to detail
+-   **Visual hierarchy**: Strategic use of color, grouping, and typography
+-   **Contextual information**: Inline calculations and explanatory footnotes
+-   **Reproducibility**: Complete code with caching for offline work
+-   **Accessibility**: Clear labels and logical structure
+
+All code and data are open source and fully reproducible. The analysis can be regenerated with updated data by simply re-running this Quarto document.
+
+## Session Information
+
+```{r session-info}
+#| code-summary: "R session information"
+sessionInfo()
+```
+
+------------------------------------------------------------------------
+
+**Contest submission**: 2025 Table Contest \| **Created with**: Quarto + gt + R
